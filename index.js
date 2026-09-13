@@ -312,6 +312,163 @@
     }
   });
 
+  // SKY SURFER v7.6: deterministic idle UI monitor.
+  var ssNavIdleDelay = 3000;
+  var ssNavLastActivityAt = Date.now();
+  var ssNavIdleState = false;
+  var ssNavLastPointerX = null;
+  var ssNavLastPointerY = null;
+  var ssNavMoveAccumulator = 0;
+
+  function ssNavApplyIdleState(isIdle) {
+    if (!document.body) return;
+    ssNavIdleState = !!isIdle;
+    document.body.classList.toggle('ss-nav-hotspots-idle', ssNavIdleState);
+    // Desktop previews are class-driven by verified physical mouse movement; the class is cleared below when needed.
+  }
+
+  function ssNavRecordActivity() {
+    ssNavLastActivityAt = Date.now();
+    ssNavMoveAccumulator = 0;
+    if (ssNavIdleState) ssNavApplyIdleState(false);
+  }
+
+  function ssNavPointerPoint(event) {
+    if (!event) return null;
+    if (event.touches && event.touches.length) {
+      return { x:Number(event.touches[0].clientX), y:Number(event.touches[0].clientY) };
+    }
+    if (event.changedTouches && event.changedTouches.length) {
+      return { x:Number(event.changedTouches[0].clientX), y:Number(event.changedTouches[0].clientY) };
+    }
+    if (typeof event.clientX === 'number' && typeof event.clientY === 'number') {
+      return { x:Number(event.clientX), y:Number(event.clientY) };
+    }
+    return null;
+  }
+
+  function ssNavHandleMove(event) {
+    if (!event || event.isTrusted === false) return;
+
+    var dx = 0;
+    var dy = 0;
+    if (typeof event.movementX === 'number' && typeof event.movementY === 'number') {
+      dx = event.movementX;
+      dy = event.movementY;
+    }
+
+    var point = ssNavPointerPoint(event);
+    if ((!dx && !dy) && point && Number.isFinite(point.x) && Number.isFinite(point.y) &&
+        ssNavLastPointerX !== null && ssNavLastPointerY !== null) {
+      dx = point.x - ssNavLastPointerX;
+      dy = point.y - ssNavLastPointerY;
+    }
+
+    if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+      ssNavLastPointerX = point.x;
+      ssNavLastPointerY = point.y;
+    }
+
+    var distance = Math.hypot(dx, dy);
+    if (!Number.isFinite(distance) || distance <= 0) return;
+
+    // Require a few pixels of accumulated physical pointer motion. This ignores
+    // stationary-cursor target changes and tiny rendering/layout jitter.
+    ssNavMoveAccumulator += distance;
+    if (ssNavMoveAccumulator >= 3) ssNavRecordActivity();
+  }
+
+  function ssNavHandleImmediateActivity(event) {
+    if (event && event.isTrusted === false) return;
+    var point = ssNavPointerPoint(event);
+    if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+      ssNavLastPointerX = point.x;
+      ssNavLastPointerY = point.y;
+    }
+    ssNavRecordActivity();
+  }
+
+  function ssNavMarkIdleElement(element) {
+    if (!element || !element.classList) return;
+    // Keep an opened information panel readable, but allow an opened scene list
+    // to fade with the rest of the tour controls during the idle presentation state.
+    if (element.classList.contains('info-hotspot') ||
+        element.classList.contains('info-hotspot-modal')) return;
+    element.classList.add('ss-idle-ui');
+  }
+
+  function ssNavCollectIdleElements(root) {
+    var scope = root && root.querySelectorAll ? root : document;
+    var selectors = [
+      '.link-hotspot',
+      '#titleBar',
+      '#sceneList',
+      '#sceneListToggle',
+      '#autorotateToggle',
+      '#fullscreenToggle',
+      '.viewControlButton',
+      '#viewUp', '#viewDown', '#viewLeft', '#viewRight', '#viewIn', '#viewOut',
+      '.ss-audio-player',
+      '#player.player',
+      '.player#player'
+    ];
+
+    if (root && root.matches) {
+      for (var r = 0; r < selectors.length; r++) {
+        try {
+          if (root.matches(selectors[r])) ssNavMarkIdleElement(root);
+        } catch (_) {}
+      }
+    }
+
+    for (var i = 0; i < selectors.length; i++) {
+      var found;
+      try { found = scope.querySelectorAll(selectors[i]); }
+      catch (_) { found = []; }
+      for (var j = 0; j < found.length; j++) ssNavMarkIdleElement(found[j]);
+    }
+  }
+
+  ssNavCollectIdleElements(document);
+
+  if (window.MutationObserver && document.documentElement) {
+    var ssNavObserver = new MutationObserver(function(records) {
+      for (var i = 0; i < records.length; i++) {
+        for (var j = 0; j < records[i].addedNodes.length; j++) {
+          var node = records[i].addedNodes[j];
+          if (node && node.nodeType === 1) ssNavCollectIdleElements(node);
+        }
+      }
+    });
+    ssNavObserver.observe(document.documentElement, { childList:true, subtree:true });
+  }
+
+  var ssNavPassiveOptions = { capture:true, passive:true };
+  var ssNavActiveOptions = { capture:true };
+
+  if (window.PointerEvent) {
+    document.addEventListener('pointermove', ssNavHandleMove, ssNavPassiveOptions);
+    document.addEventListener('pointerdown', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+  } else {
+    document.addEventListener('mousemove', ssNavHandleMove, ssNavPassiveOptions);
+    document.addEventListener('mousedown', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+    document.addEventListener('touchstart', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+    document.addEventListener('touchmove', ssNavHandleMove, ssNavPassiveOptions);
+  }
+
+  document.addEventListener('wheel', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+  document.addEventListener('click', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+  document.addEventListener('keydown', ssNavHandleImmediateActivity, ssNavActiveOptions);
+  document.addEventListener('gesturestart', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+  document.addEventListener('gesturechange', ssNavHandleImmediateActivity, ssNavPassiveOptions);
+
+  // Do not treat resize, orientation, focus, visibility, or autorotation as visitor
+  // interaction. Only actual user input should keep the controls awake.
+  window.setInterval(function() {
+    var shouldBeIdle = (Date.now() - ssNavLastActivityAt) >= ssNavIdleDelay;
+    if (shouldBeIdle !== ssNavIdleState) ssNavApplyIdleState(shouldBeIdle);
+  }, 200);
+
   function createLinkHotspotElement(hotspot) {
 
     // Create wrapper element to hold icon and tooltip.
@@ -414,7 +571,12 @@
     previewImage.src = 'thumbnails/' + hotspot.target + '.jpg';
     previewImage.alt = targetScene.name;
     previewMedia.appendChild(previewImage);
+    var previewTitle = document.createElement('div');
+    previewTitle.classList.add('ss-scene-preview-title');
+    previewTitle.textContent = targetScene.name;
+
     previewCard.appendChild(previewMedia);
+    previewCard.appendChild(previewTitle);
     previewCard.addEventListener('mouseenter', function() {
       if (wrapper.classList.contains('ss-standard-preview-visible')) {
         if (typeof ssStandardPreviewHideTimer !== 'undefined' && ssStandardPreviewHideTimer !== null) {
