@@ -77,6 +77,35 @@
   // Initialize viewer.
   var viewer = new Marzipano.Viewer(panoElement, viewerOpts);
 
+  // SKY_SURFER_LANDSCAPE_VIEWPORT_REFRESH_V1
+  var ssViewportRefreshTimer = null;
+  function ssRefreshPanoramaViewport() {
+    if (ssViewportRefreshTimer) {
+      clearTimeout(ssViewportRefreshTimer);
+      ssViewportRefreshTimer = null;
+    }
+
+    requestAnimationFrame(function() {
+      if (viewer && typeof viewer.updateSize === 'function') viewer.updateSize();
+      requestAnimationFrame(function() {
+        if (viewer && typeof viewer.updateSize === 'function') viewer.updateSize();
+      });
+    });
+
+    ssViewportRefreshTimer = setTimeout(function() {
+      ssViewportRefreshTimer = null;
+      if (viewer && typeof viewer.updateSize === 'function') viewer.updateSize();
+    }, 320);
+  }
+
+  window.addEventListener('orientationchange', ssRefreshPanoramaViewport);
+  window.addEventListener('resize', ssRefreshPanoramaViewport);
+  document.addEventListener('fullscreenchange', ssRefreshPanoramaViewport);
+  document.addEventListener('webkitfullscreenchange', ssRefreshPanoramaViewport);
+  if (window.visualViewport && window.visualViewport.addEventListener) {
+    window.visualViewport.addEventListener('resize', ssRefreshPanoramaViewport);
+  }
+
   // Create scenes.
   var scenes = data.scenes.map(function(data) {
     var urlPrefix = "tiles";
@@ -273,6 +302,16 @@
 
   // SKY_SURFER_TOOLS_BUILD_V8_4
   // SKY_SURFER_PREVIEW_ENHANCER_V33
+  // SKY_SURFER_PROJECT_COMPATIBILITY=STANDARD
+  // SKY_SURFER_SPECIAL_PREVIEW_MODE=OFF
+  // Touch behavior: tap away from a link hotspot to close any open destination preview.
+  document.addEventListener('click', function() {
+    var openPreviews = document.querySelectorAll('.link-hotspot.preview-visible');
+    for (var i = 0; i < openPreviews.length; i++) {
+      openPreviews[i].classList.remove('preview-visible');
+    }
+  });
+
   function createLinkHotspotElement(hotspot) {
 
     // Create wrapper element to hold icon and tooltip.
@@ -293,19 +332,111 @@
     }
 
     // Add click event handler.
-    wrapper.addEventListener('click', function() {
+    // Desktop: click navigates normally.
+    // Phone/tablet: first tap shows the destination preview; second tap navigates.
+    wrapper.addEventListener('click', function(event) {
+      var touchLike = document.body.classList.contains('touch') ||
+                      document.body.classList.contains('mobile') ||
+                      (window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches);
+
+      if (touchLike) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!wrapper.classList.contains('preview-visible')) {
+          var openPreviews = document.querySelectorAll('.link-hotspot.preview-visible');
+          for (var i = 0; i < openPreviews.length; i++) {
+            openPreviews[i].classList.remove('preview-visible');
+          }
+          wrapper.classList.add('preview-visible');
+          return;
+        }
+      }
+
       switchScene(findSceneById(hotspot.target));
     });
+
+    var ssStandardPreviewHideTimer = null;
+
+    function ssStandardPreviewShow() {
+      if (ssStandardPreviewHideTimer !== null) {
+        window.clearTimeout(ssStandardPreviewHideTimer);
+        ssStandardPreviewHideTimer = null;
+      }
+
+      var openStandardPreviews = document.querySelectorAll('.link-hotspot.ss-standard-preview-visible');
+      for (var s = 0; s < openStandardPreviews.length; s++) {
+        if (openStandardPreviews[s] !== wrapper) {
+          openStandardPreviews[s].classList.remove('ss-standard-preview-visible');
+        }
+      }
+
+      wrapper.classList.add('ss-standard-preview-visible');
+    }
+
+    function ssStandardPreviewScheduleHide() {
+      if (ssStandardPreviewHideTimer !== null) {
+        window.clearTimeout(ssStandardPreviewHideTimer);
+      }
+
+      ssStandardPreviewHideTimer = window.setTimeout(function() {
+        ssStandardPreviewHideTimer = null;
+        if (wrapper.matches(':hover')) return;
+        wrapper.classList.remove('ss-standard-preview-visible');
+      }, 500);
+    }
+
+    wrapper.addEventListener('mouseenter', ssStandardPreviewShow);
+    wrapper.addEventListener('mouseleave', ssStandardPreviewScheduleHide);
+
 
     // Prevent touch and scroll events from reaching the parent element.
     // This prevents the view control logic from interfering with the hotspot.
     stopTouchAndScrollEventPropagation(wrapper);
 
     // Create tooltip element.
+    // SKY SURFER: isolated destination preview. This intentionally does NOT
+    // reuse Marzipano's .link-hotspot-tooltip class so older/custom project CSS
+    // cannot crop, resize, or distort the 16:9 destination card.
     var tooltip = document.createElement('div');
-    tooltip.classList.add('hotspot-tooltip');
-    tooltip.classList.add('link-hotspot-tooltip');
-    tooltip.innerHTML = findSceneDataById(hotspot.target).name;
+    tooltip.classList.add('ss-scene-preview-anchor');
+
+    var targetScene = findSceneDataById(hotspot.target);
+
+    var previewCard = document.createElement('div');
+    previewCard.classList.add('ss-scene-preview-card');
+
+    var previewMedia = document.createElement('div');
+    previewMedia.classList.add('ss-scene-preview-media');
+
+    var previewImage = document.createElement('img');
+    previewImage.classList.add('ss-scene-preview-image');
+    previewImage.src = 'thumbnails/' + hotspot.target + '.jpg';
+    previewImage.alt = targetScene.name;
+    previewMedia.appendChild(previewImage);
+    previewCard.appendChild(previewMedia);
+    previewCard.addEventListener('mouseenter', function() {
+      if (wrapper.classList.contains('ss-standard-preview-visible')) {
+        if (typeof ssStandardPreviewHideTimer !== 'undefined' && ssStandardPreviewHideTimer !== null) {
+          window.clearTimeout(ssStandardPreviewHideTimer);
+          ssStandardPreviewHideTimer = null;
+        }
+      }
+    });
+
+    previewCard.addEventListener('mouseleave', function() {
+      if (wrapper.classList.contains('ss-standard-preview-visible') &&
+          typeof ssStandardPreviewScheduleHide === 'function') {
+        ssStandardPreviewScheduleHide();
+      }
+    });
+
+    previewCard.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      switchScene(findSceneById(hotspot.target));
+    });
+    tooltip.appendChild(previewCard);
 
     wrapper.appendChild(icon);
     wrapper.appendChild(tooltip);
